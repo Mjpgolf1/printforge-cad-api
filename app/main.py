@@ -1,11 +1,22 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import Response
+# NEW: Import CORS middleware
+from fastapi.middleware.cors import CORSMiddleware
 import cadquery as cq
 from cadquery import exporters
 import io, math
 from typing import List, Dict
 
 app = FastAPI(title="CAD Microservice", version="0.1")
+
+# NEW: Add CORS middleware configuration
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allows all origins
+    allow_credentials=True,
+    allow_methods=["*"],  # Allows all methods
+    allow_headers=["*"],  # Allows all headers
+)
 
 def _export_stl(shape) -> bytes:
     buf = io.BytesIO()
@@ -89,23 +100,18 @@ def contour_inset(payload: Dict):
         scaled_pts = []
         max_r = 0
         for x,y in pts:
-            dx, dy = x - cx, y - cy
-            r = math.sqrt(dx**2 + dy**2)
-            if r > max_r: max_r = r
-            if r > 1e-3:
-                nx,ny = (dx/r) * (r+tol), (dy/r) * (r+tol)
-                scaled_pts.append((nx+cx, ny+cy))
-            else:
-                scaled_pts.append((cx,cy))
+            max_r = max(max_r, math.hypot(x-cx, y-cy))
+        
+        scale_factor = (max_r + tol) / max_r if max_r > 0 else 1.0
 
-        # Create the solid block and the cutout shape
-        solid_block = _block(oL, oW, oH)
-        tool_shape = (
-            cq.Workplane("XY").polyline(scaled_pts).close()
-            .extrude(tool_h)
-            .translate((0,0,-tool_h/2 + floor))
-        )
-        final_shape = solid_block.cut(tool_shape)
-        return Response(_export_stl(final_shape), media_type="model/stl")
+        for x,y in pts:
+            scaled_pts.append(((x-cx)*scale_factor + cx, (y-cy)*scale_factor + cy))
+        
+        polygon = cq.Workplane("XY").polyline(scaled_pts).close()
+        cutout = polygon.extrude(tool_h)
+        base = _block(oL, oW, oH)
+        shape = base.cut(cutout.translate((0,0,-oH/2 + tool_h/2 + floor)))
+        
+        return Response(_export_stl(shape), media_type="model/stl")
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
