@@ -1,6 +1,5 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import Response
-# NEW: Import CORS middleware
 from fastapi.middleware.cors import CORSMiddleware
 import cadquery as cq
 from cadquery import exporters
@@ -9,13 +8,12 @@ from typing import List, Dict
 
 app = FastAPI(title="CAD Microservice", version="0.1")
 
-# NEW: Add CORS middleware configuration
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allows all origins
+    allow_origins=["*"],
     allow_credentials=True,
-    allow_methods=["*"],  # Allows all methods
-    allow_headers=["*"],  # Allows all headers
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 def _export_stl(shape) -> bytes:
@@ -91,26 +89,39 @@ def contour_inset(payload: Dict):
         oL,oW,oH = float(outer["length_mm"]), float(outer["width_mm"]), float(outer["height_mm"])
         tool_h = float(payload.get("tool_h_mm", oH))
 
+        if not pts or len(pts) < 3:
+            raise ValueError("Contour requires at least 3 points.")
+
         if _area_ccw(pts) < 0: pts.reverse()
         
-        # Add tolerance by scaling around centroid (approximate offset)
         cx = sum(p[0] for p in pts) / len(pts)
         cy = sum(p[1] for p in pts) / len(pts)
         
-        scaled_pts = []
         max_r = 0
         for x,y in pts:
             max_r = max(max_r, math.hypot(x-cx, y-cy))
         
-        scale_factor = (max_r + tol) / max_r if max_r > 0 else 1.0
+        # *** THIS IS THE FIX ***
+        # If max_r is zero (or very close), the shape is a point, so we can't scale it.
+        # We handle this by setting scale_factor to 1.0 to prevent division by zero.
+        scale_factor = (max_r + tol) / max_r if max_r > 1e-6 else 1.0
 
+        scaled_pts = []
         for x,y in pts:
             scaled_pts.append(((x-cx)*scale_factor + cx, (y-cy)*scale_factor + cy))
         
-        polygon = cq.Workplane("XY").polyline(scaled_pts).close()
-        cutout = polygon.extrude(tool_h)
-        base = _block(oL, oW, oH)
-        shape = base.cut(cutout.translate((0,0,-oH/2 + tool_h/2 + floor)))
+        solid_block = _block(oL, oW, oH)
+        tool_shape = (
+            cq.Workplane("XY").polyline(scaled_pts).close()
+            .extrude(tool_h)
+            .translate((0,0,-oH/2 + floor))
+        )
+        final_shape = solid_block.cut(tool_shape)
+        return Response(_export_stl(final_shape), media_type="model/stl")
+
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
         
         return Response(_export_stl(shape), media_type="model/stl")
     except Exception as e:
