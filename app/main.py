@@ -121,8 +121,3 @@ def contour_inset(payload: Dict):
 
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
-
-        
-        return Response(_export_stl(shape), media_type="model/stl")
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
