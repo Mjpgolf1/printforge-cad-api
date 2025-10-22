@@ -1,6 +1,6 @@
 FROM cadquery/cadquery:latest
 
-# NEW: Add the local bin directory to the system's PATH
+# Add the local bin directory to the system's PATH
 ENV PATH="/home/cq/.local/bin:${PATH}"
 
 # Install Python dependencies
